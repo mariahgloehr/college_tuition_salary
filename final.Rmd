@@ -1,0 +1,134 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r, message = FALSE}
+library(tidyverse)
+library(car)
+library(ggeffects)
+```
+
+```{r, message = FALSE}
+#importing datasets from tidytuesday
+
+tuition_cost <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-03-10/tuition_cost.csv')
+
+salary_potential <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-03-10/salary_potential.csv')
+
+diversity_school <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-03-10/diversity_school.csv') %>%
+  select("name", "total_enrollment") %>%
+  distinct()
+```
+
+```{r}
+#creating our desired dataset
+
+full_data <- full_join(tuition_cost, salary_potential, by = "name") %>%
+  full_join(diversity_school, by = "name") %>%
+  #merging the three datasets by school name
+  drop_na(name, type, out_of_state_total, mid_career_pay, total_enrollment) %>%
+  #removing any schools that do not have available the data we want
+  mutate("ivy_league" = ifelse(name %in% c("Brown University", "Cornell University", "Dartmouth College", "Columbia University", "Yale University", "Harvard College", "University of Pennsylvania", "Princeton University"), "1", "0")) %>%
+  #creating an indicator variable to designate whether a school is an ivy league or not
+  mutate("tuition_avg" = (in_state_total + out_of_state_total)/2)
+#creating a tuition average variable by finding the mean instate and out of state tuitions
+```
+
+```{r}
+#writing as a csv to share
+write_csv(full_data, file = "college_scoreboard.csv")
+```
+
+
+### First Model (MLR)
+
+```{r}
+#matrix plot to check for relationships
+pairs(mid_career_pay ~ tuition_avg + factor(type) + total_enrollment + factor(ivy_league), data = full_data)
+#first model with untransformed data
+college1_mlr <- lm(mid_career_pay ~ tuition_avg + type + total_enrollment + ivy_league, data = full_data)
+summary(college1_mlr)
+```
+
+**Multiple regression linear model:**
+
+$y_{i}$ = 53091.45 + 0.824(tuition_avg) + 10965.41(typePublic) + 0.284(total_enrollment) + 18706.94(ivy_league)
+
+All p-values are extremely low. $R^{2}$ = 0.555
+
+### First Model (Residual Plots)
+
+```{r}
+#checking assumptions with residual plots, clear right skew in total_enrollment but other plots look ok 
+residualPlots(college1_mlr, test = FALSE)
+residualPlot(college1_mlr)
+```
+
+The residuals for tuition, type, ivy league, and the fitted model seem evenly distributed, but very far from 0. There is a lot of variation in this model. The enrollment residuals are skewed right.
+
+### 2nd Model (log(enrollment))
+
+```{r}
+#fitting second model with natural transformation on total_enrollment
+college2_mlr <- lm(mid_career_pay ~ tuition_avg + type + log(total_enrollment) + ivy_league, data = full_data)
+summary(college2_mlr)
+#checking assumptions with residual plots, no more skew but residuals are very large
+residualPlot(college2_mlr)
+residualPlots(college2_mlr)
+```
+
+$y_{i}$ = 36120 + 0.801(tuition_avg) + 9980(typePublic) + 2446(log(total_enrollment)) + 18140(ivy_league)
+
+P-values still look good, and residual plots are not skewed. $R^{2}$ value is slightly lower at .553.
+
+```{r}
+#fitting third model with natural log on response variable as well
+college3_mlr <- lm(log(mid_career_pay) ~ tuition_avg + type + log(total_enrollment) + ivy_league, data = full_data)
+summary(college3_mlr)
+#checking assumptions with residual plots, everything looks fine
+residualPlot(college3_mlr)
+residualPlots(college3_mlr)
+```
+
+
+### Multicollinearity?
+
+```{r}
+#using correlation matrices and VIF to check for multicolinearity, nothing concerning found
+pairs(mid_career_pay ~ tuition_avg + factor(type) + log(total_enrollment) + factor(ivy_league), data = full_data)
+vif(college3_mlr)
+```
+
+VIF: no values greater than 5! looks good
+
+### Outliers?
+
+```{r}
+#using leverage and Cook's distance to look for influential points, nothing concerning found
+infIndexPlot(college3_mlr, vars = "hat")
+infIndexPlot(college3_mlr, vars = "Cook")
+```
+
+```{r}
+#graphing the model prediction with all predictors
+model_pred1 <- ggpredict(college3_mlr, terms = ~tuition_avg + type + total_enrollment)
+plot(model_pred1, show_ci = FALSE) +
+  labs(x = "Average Tuition",
+       y = "Mid-Career Salary",
+       title = "Predicted Mid-Career Salary",
+       color = "Type")
+
+#graphing model prediction just tuition vs mid-career pay
+model_pred2 <- ggpredict(college3_mlr, terms = ~tuition_avg)
+plot(model_pred2, show_ci = FALSE) +
+  labs(x = "Average Tuition",
+       y = "Estimated Mid-Career Salary",
+       title = "Predicted Mid-Career Salary")
+
+```
+```{r}
+#creating 95% confidence intervals for the coefficients  
+confint(college3_mlr, level = 0.95)
+```
+
